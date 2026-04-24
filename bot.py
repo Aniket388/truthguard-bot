@@ -116,7 +116,9 @@ class HealthCheck(BaseHTTPRequestHandler):
         self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
 
 def main():
-    threading.Thread(target=lambda: HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), HealthCheck).serve_forever(), daemon=True).start()
+    # NEW LINE (Added do_HEAD)
+    handlers = {'do_GET': lambda s: (s.send_response(200), s.end_headers(), s.wfile.write(b"OK")), 'do_HEAD': lambda s: (s.send_response(200), s.end_headers())}
+    threading.Thread(target=lambda: HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), type('H', (BaseHTTPRequestHandler,), handlers)).serve_forever(), daemon=True).start()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ai", lambda u, c: AWAITING_AI_CHECK.add(u.effective_user.id) or u.message.reply_text("🤖 AI Detection Mode ON")))
