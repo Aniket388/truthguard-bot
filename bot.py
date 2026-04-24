@@ -24,7 +24,7 @@ if not all([BOT_TOKEN, GEMINI_API_KEY, TAVILY_API_KEY]):
 
 # Configure NEW Google GenAI SDK
 client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL_ID = 'gemini-2.0-flash'
+MODEL_ID = 'gemini-1.5-flash'
 
 # Configure Tavily
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
