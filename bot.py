@@ -1,6 +1,4 @@
-import os
-import logging
-import threading
+import os, logging, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from google import genai
 from PIL import Image
@@ -10,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # Setup Logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Load Environment Variables
@@ -19,231 +17,111 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
-if not all([BOT_TOKEN, GEMINI_API_KEY, TAVILY_API_KEY]):
-    logger.error("MISSING CORE API KEYS! Check your .env file or Render settings.")
-
-# Configure NEW Google GenAI SDK
-client = genai.Client(api_key=GEMINI_API_KEY)
+# ==========================================
+# FINAL OPTIMIZED CONFIGURATION
+# ==========================================
 MODEL_ID = 'gemini-2.5-flash-lite'
-
-# Configure Tavily
+client = genai.Client(api_key=GEMINI_API_KEY)
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
-
-# STATE TRACKER
 AWAITING_AI_CHECK = set()
 
 # ==========================================
-# LAYER 0: Fast Python Sanity Check
+# CORE FORENSIC & FACT-CHECK LOGIC
 # ==========================================
-def sanity_check_passed(text: str) -> tuple[bool, str]:
-    text_lower = text.lower().strip()
-    junk_phrases = {
-        "hi", "hello", "hey", "sup", "yo", "morning", "good morning", 
-        "thanks", "thank you", "ok", "okay", "cool", "bye", "yes", "no",
-        "ping", "test", "how are you", "who are you", "what do you do", "help"
-    }
-    if text_lower in junk_phrases:
-        return False, "Hello! 👋 I am TruthGuard. Send me a news headline or image to fact-check, or use /ai to detect AI images."
-    if len(text_lower.split()) < 3:
-        return False, "That's a bit too short for me to fact-check. Can you provide a full sentence or a specific claim?"
-    return True, ""
 
-# ==========================================
-# LAYER 1: Deep Web Retrieval
-# ==========================================
 def search_web_evidence(claim: str) -> str:
     try:
         response = tavily_client.search(query=claim, search_depth="basic", max_results=3)
-        results = response.get("results", [])
-        if not results:
-            return "No search results found."
-        context = ""
-        for i, r in enumerate(results):
-            context += f"Source {i+1}: {r.get('title', '')} - {r.get('content', '')}\n\n"
-        return context
-    except Exception as e:
-        logger.error(f"Tavily Search Error: {e}")
-        return "Search failed."
+        return "".join([f"Source: {r.get('content', '')}\n\n" for r in response.get("results", [])])
+    except: return "Search failed."
 
-# ==========================================
-# LAYER 2: LLM Reasoning
-# ==========================================
 def analyze_with_llm(claim: str, context: str) -> str:
-    prompt = f"""
-    You are an elite, highly accurate fact-checking AI. Analyze the CLAIM strictly based on the WEB SEARCH EVIDENCE.
-    CLAIM: "{claim}"
-    WEB SEARCH EVIDENCE:\n{context}
-    RULES:
-    1. Strong support = TRUE
-    2. Strong contradiction = FALSE
-    3. Mix of both = PARTIALLY TRUE
-    4. Insufficient/unrelated = UNVERIFIED
-    5. Be extremely concise.
-    Respond EXACTLY in this format:
-    VERDICT: [TRUE/FALSE/PARTIALLY TRUE/UNVERIFIED]
-    REASON: [One clear, factual sentence explaining why based on the evidence.]
-    """
+    prompt = f"Expert Fact-Check: '{claim}' using: {context}. Format: VERDICT: [STATUS] REASON: [WHY]."
     try:
         response = client.models.generate_content(model=MODEL_ID, contents=prompt)
         return response.text.strip()
-    except Exception as e:
-        logger.error(f"Gemini Reasoning Error: {e}")
-        return f"VERDICT: ERROR\nREASON: API Connection failed - {str(e)}"
+    except Exception as e: return f"Reasoning Error: {str(e)}"
 
-# ==========================================
-# LAYER 3: Gemini Multi-Modal (AI Detect & OCR)
-# ==========================================
 def detect_ai_image(file_path: str) -> str:
+    """Forensic Investigator prompt for historical and visual analysis."""
     try:
         img = Image.open(file_path)
         prompt = """
-        Analyze this image carefully. Is it AI-generated or a real photograph? 
-        Look for AI artifacts like distorted hands, unnatural lighting, overly smooth textures, weird background text, or impossible geometry.
-        Respond EXACTLY in this format (and nothing else):
-        **[🤖 AI GENERATED or 📸 REAL/HUMAN]**
-        *Reason:* [One short sentence explaining the visual evidence you found.]
+        Analyze this image as an expert forensic investigator:
+        1. IDENTIFY: Who are the people or what are the objects?
+        2. HISTORICAL CHECK: Is it historically possible for these people to be together?
+        3. VISUAL CHECK: Look for AI artifacts like weird hands or physics errors.
+        
+        Respond in this format:
+        VERDICT: [AI GENERATED or REAL/HUMAN]
+        REASON: [Short explanation of visual and historical evidence.]
         """
         response = client.models.generate_content(model=MODEL_ID, contents=[img, prompt])
         return response.text.strip()
-    except Exception as e:
-        logger.error(f"Gemini Vision API Error: {e}")
-        return f"⚠️ Detection failed due to API Error: {str(e)}"
+    except Exception as e: return f"Detection Error: {str(e)}"
 
-def extract_text_with_gemini(file_path: str) -> str:
+def extract_text(file_path: str) -> str:
     try:
         img = Image.open(file_path)
-        prompt = "Extract all readable text from this image. Do not add any commentary. If there is no readable text, reply with exactly the word NONE."
+        prompt = "Extract all text from this image. If none, reply 'NONE'."
         response = client.models.generate_content(model=MODEL_ID, contents=[img, prompt])
-        text = response.text.strip()
-        if text == "NONE":
-            return ""
-        return text
-    except Exception as e:
-        logger.error(f"Gemini OCR Error: {e}")
-        return f"API_ERROR: {str(e)}"
+        t = response.text.strip()
+        return "" if t == "NONE" else t
+    except Exception as e: return f"OCR_ERROR: {str(e)}"
 
 # ==========================================
 # TELEGRAM HANDLERS
 # ==========================================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    welcome_message = (
-        "🛡️ **TruthGuard Active**\n\n"
-        "🔍 Send me a news headline or screenshot to fact-check.\n"
-        "🤖 Send `/ai` to enter AI Image Detection Mode.\n\n"
-        "⚠️ *Disclaimer: I am an AI fact-checking assistant. My verdicts are based on live web retrieval and visual analysis models. I am highly capable, but not infallible. Always use critical thinking!*"
-    )
-    await update.message.reply_text(welcome_message, parse_mode='Markdown')
+    await update.message.reply_text(f"🛡️ **TruthGuard v12.0 Active**\nModel: {MODEL_ID}\nStatus: Ready.", parse_mode='Markdown')
 
-async def cmd_ai_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    AWAITING_AI_CHECK.add(user_id)
-    await update.message.reply_text("🤖 **AI Detection Mode ON**\n\nPlease send me the image you want to check. (This mode will turn off after one image).", parse_mode='Markdown')
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id in AWAITING_AI_CHECK:
-        AWAITING_AI_CHECK.remove(user_id)
-
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     claim = update.message.text
-    is_valid, reply_message = sanity_check_passed(claim)
-    if not is_valid:
-        await update.message.reply_text(reply_message)
-        return
-        
-    processing_msg = await update.message.reply_text(f"🔍 Searching the web via Tavily for: '{claim}'...")
+    msg = await update.message.reply_text("🔍 Analyzing claim...")
     evidence = search_web_evidence(claim)
-    
-    await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text="🧠 Evidence found. Reasoning with Gemini...")
     verdict = analyze_with_llm(claim, evidence)
-    
-    try:
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🛡️ **TruthGuard Analysis**\n\n**Claim:** {claim}\n\n{verdict}", parse_mode='Markdown')
-    except:
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🛡️ TruthGuard Analysis\n\nClaim: {claim}\n\n{verdict}")
+    await msg.edit_text(f"🛡️ **Analysis**\n\n{verdict}")
 
-async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
-    file_path = "temp_image.jpg"
+    file_path = "temp.jpg"
     await file.download_to_drive(file_path)
 
     if user_id in AWAITING_AI_CHECK:
         AWAITING_AI_CHECK.remove(user_id)
-        processing_msg = await update.message.reply_text("🤖 Analyzing image details with Gemini 2.0 Vision...")
-        try:
-            ai_verdict = detect_ai_image(file_path)
-            try:
-                await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🔍 **AI Image Detection Result**\n\n{ai_verdict}", parse_mode='Markdown')
-            except:
-                await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🔍 AI Image Detection Result\n\n{ai_verdict}")
-        except Exception as e:
-            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"Error: {e}")
-        finally:
-            if os.path.exists(file_path): os.remove(file_path)
-        return
-
-    processing_msg = await update.message.reply_text("🖼️ Extracting text with Gemini 2.0 Vision...")
-    try:
-        claim = extract_text_with_gemini(file_path)
-        
-        if claim.startswith("API_ERROR:"):
-            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"❌ **Google API Error during text extraction:**\n{claim}")
-            return
-
-        if not claim.strip():
-            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text="❌ Could not extract any readable text from the image.")
-            return
-
-        is_valid, reply_message = sanity_check_passed(claim)
-        if not is_valid:
-            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"📝 Extracted: '{claim}'\n\n❌ {reply_message}")
-            return
-
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"📝 Extracted: '{claim[:50]}...'\n🔍 Searching web via Tavily...")
-        evidence = search_web_evidence(claim)
-        
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text="🧠 Reasoning with Gemini 2.0 Flash...")
-        verdict = analyze_with_llm(claim, evidence)
-        
-        try:
-            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🖼️ **Extracted Claim:** {claim}\n\n🛡️ **TruthGuard Analysis**\n\n{verdict}", parse_mode='Markdown')
-        except:
-            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🖼️ Extracted Claim: {claim}\n\n🛡️ TruthGuard Analysis\n\n{verdict}")
-    except Exception as e:
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"Fatal Error: {e}")
-    finally:
-        if os.path.exists(file_path): os.remove(file_path)
+        msg = await update.message.reply_text("🤖 Running Forensic AI Analysis...")
+        result = detect_ai_image(file_path)
+        await msg.edit_text(f"🔍 **Forensic Result**\n\n{result}")
+    else:
+        msg = await update.message.reply_text("🖼️ Extracting & Checking image content...")
+        claim = extract_text(file_path)
+        if "OCR_ERROR" in claim or not claim:
+            await msg.edit_text("❌ No clear text found in image for fact-checking.")
+        else:
+            evidence = search_web_evidence(claim)
+            verdict = analyze_with_llm(claim, evidence)
+            await msg.edit_text(f"🛡️ **Analysis**\n\n{verdict}")
+    
+    if os.path.exists(file_path): os.remove(file_path)
 
 # ==========================================
-# RENDER.COM HEALTH CHECK SERVER
+# DEPLOYMENT SETUP
 # ==========================================
-class HealthCheckHandler(BaseHTTPRequestHandler):
+
+class HealthCheck(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"TruthGuard Bot is Alive and Running!")
-
-def run_dummy_server():
-    port = int(os.environ.get("PORT", 8080))
-    logger.info(f"Starting dummy web server on port {port} to keep Render awake...")
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    server.serve_forever()
+        self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
 
 def main():
-    if not BOT_TOKEN:
-        logger.error("BOT_TOKEN is missing!")
-        return
-        
-    threading.Thread(target=run_dummy_server, daemon=True).start()
-    
+    threading.Thread(target=lambda: HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), HealthCheck).serve_forever(), daemon=True).start()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ai", cmd_ai_mode))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_image))
-    
-    logger.info("TruthGuard Bot v9.0 (Modern SDK Engine) is running...")
+    app.add_handler(CommandHandler("ai", lambda u, c: AWAITING_AI_CHECK.add(u.effective_user.id) or u.message.reply_text("🤖 AI Detection Mode ON")))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.run_polling()
 
 if __name__ == '__main__':
