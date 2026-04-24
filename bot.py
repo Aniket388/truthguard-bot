@@ -2,7 +2,7 @@ import os
 import logging
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import google.generativeai as genai
+from google import genai
 from PIL import Image
 from tavily import TavilyClient
 from dotenv import load_dotenv
@@ -22,10 +22,9 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 if not all([BOT_TOKEN, GEMINI_API_KEY, TAVILY_API_KEY]):
     logger.error("MISSING CORE API KEYS! Check your .env file or Render settings.")
 
-# Configure Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-# RESTORED: Gemini 2.5 Flash is back online.
-model = genai.GenerativeModel('gemini-2.0-flash')
+# Configure NEW Google GenAI SDK
+client = genai.Client(api_key=GEMINI_API_KEY)
+MODEL_ID = 'gemini-2.0-flash'
 
 # Configure Tavily
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
@@ -85,7 +84,8 @@ def analyze_with_llm(claim: str, context: str) -> str:
     REASON: [One clear, factual sentence explaining why based on the evidence.]
     """
     try:
-        return model.generate_content(prompt).text.strip()
+        response = client.models.generate_content(model=MODEL_ID, contents=prompt)
+        return response.text.strip()
     except Exception as e:
         logger.error(f"Gemini Reasoning Error: {e}")
         return f"VERDICT: ERROR\nREASON: API Connection failed - {str(e)}"
@@ -103,7 +103,8 @@ def detect_ai_image(file_path: str) -> str:
         **[🤖 AI GENERATED or 📸 REAL/HUMAN]**
         *Reason:* [One short sentence explaining the visual evidence you found.]
         """
-        return model.generate_content([prompt, img]).text.strip()
+        response = client.models.generate_content(model=MODEL_ID, contents=[img, prompt])
+        return response.text.strip()
     except Exception as e:
         logger.error(f"Gemini Vision API Error: {e}")
         return f"⚠️ Detection failed due to API Error: {str(e)}"
@@ -112,14 +113,13 @@ def extract_text_with_gemini(file_path: str) -> str:
     try:
         img = Image.open(file_path)
         prompt = "Extract all readable text from this image. Do not add any commentary. If there is no readable text, reply with exactly the word NONE."
-        response = model.generate_content([prompt, img])
+        response = client.models.generate_content(model=MODEL_ID, contents=[img, prompt])
         text = response.text.strip()
         if text == "NONE":
             return ""
         return text
     except Exception as e:
         logger.error(f"Gemini OCR Error: {e}")
-        # Exposing the real error so we aren't guessing
         return f"API_ERROR: {str(e)}"
 
 # ==========================================
@@ -156,7 +156,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text="🧠 Evidence found. Reasoning with Gemini...")
     verdict = analyze_with_llm(claim, evidence)
     
-    await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🛡️ **TruthGuard Analysis**\n\n**Claim:** {claim}\n\n{verdict}", parse_mode='Markdown')
+    try:
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🛡️ **TruthGuard Analysis**\n\n**Claim:** {claim}\n\n{verdict}", parse_mode='Markdown')
+    except:
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🛡️ TruthGuard Analysis\n\nClaim: {claim}\n\n{verdict}")
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -167,21 +170,23 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id in AWAITING_AI_CHECK:
         AWAITING_AI_CHECK.remove(user_id)
-        processing_msg = await update.message.reply_text("🤖 Analyzing image details with Gemini 2.5 Vision...")
+        processing_msg = await update.message.reply_text("🤖 Analyzing image details with Gemini 2.0 Vision...")
         try:
             ai_verdict = detect_ai_image(file_path)
-            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🔍 **AI Image Detection Result**\n\n{ai_verdict}", parse_mode='Markdown')
+            try:
+                await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🔍 **AI Image Detection Result**\n\n{ai_verdict}", parse_mode='Markdown')
+            except:
+                await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🔍 AI Image Detection Result\n\n{ai_verdict}")
         except Exception as e:
             await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"Error: {e}")
         finally:
             if os.path.exists(file_path): os.remove(file_path)
         return
 
-    processing_msg = await update.message.reply_text("🖼️ Extracting text with Gemini 2.5 Vision...")
+    processing_msg = await update.message.reply_text("🖼️ Extracting text with Gemini 2.0 Vision...")
     try:
         claim = extract_text_with_gemini(file_path)
         
-        # Check if we caught a real API error
         if claim.startswith("API_ERROR:"):
             await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"❌ **Google API Error during text extraction:**\n{claim}")
             return
@@ -198,10 +203,13 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"📝 Extracted: '{claim[:50]}...'\n🔍 Searching web via Tavily...")
         evidence = search_web_evidence(claim)
         
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text="🧠 Reasoning with Gemini 2.5 Flash...")
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text="🧠 Reasoning with Gemini 2.0 Flash...")
         verdict = analyze_with_llm(claim, evidence)
         
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🖼️ **Extracted Claim:** {claim}\n\n🛡️ **TruthGuard Analysis**\n\n{verdict}", parse_mode='Markdown')
+        try:
+            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🖼️ **Extracted Claim:** {claim}\n\n🛡️ **TruthGuard Analysis**\n\n{verdict}", parse_mode='Markdown')
+        except:
+            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"🖼️ Extracted Claim: {claim}\n\n🛡️ TruthGuard Analysis\n\n{verdict}")
     except Exception as e:
         await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"Fatal Error: {e}")
     finally:
@@ -235,7 +243,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_image))
     
-    logger.info("TruthGuard Bot v8.2 (Gemini 2.5 Restored) is running...")
+    logger.info("TruthGuard Bot v9.0 (Modern SDK Engine) is running...")
     app.run_polling()
 
 if __name__ == '__main__':
