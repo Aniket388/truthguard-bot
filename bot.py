@@ -25,7 +25,7 @@ if not all([BOT_TOKEN, GEMINI_API_KEY, TAVILY_API_KEY]):
 # Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 # RESTORED: Gemini 2.5 Flash is back online.
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 # Configure Tavily
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
