@@ -1,6 +1,5 @@
 import os
 import logging
-import easyocr
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import google.generativeai as genai
@@ -30,11 +29,7 @@ model = genai.GenerativeModel('gemini-2.5-flash')
 # Configure Tavily
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
 
-# Initialize OCR
-logger.info("Loading OCR Model...")
-reader = easyocr.Reader(['en'], gpu=False)
-
-# STATE TRACKER: Remembers who asked for an AI Check
+# STATE TRACKER
 AWAITING_AI_CHECK = set()
 
 # ==========================================
@@ -54,7 +49,7 @@ def sanity_check_passed(text: str) -> tuple[bool, str]:
     return True, ""
 
 # ==========================================
-# LAYER 1 & 2: Search and Reasoning
+# LAYER 1: Deep Web Retrieval
 # ==========================================
 def search_web_evidence(claim: str) -> str:
     try:
@@ -70,6 +65,9 @@ def search_web_evidence(claim: str) -> str:
         logger.error(f"Tavily Search Error: {e}")
         return "Search failed."
 
+# ==========================================
+# LAYER 2: LLM Reasoning
+# ==========================================
 def analyze_with_llm(claim: str, context: str) -> str:
     prompt = f"""
     You are an elite, highly accurate fact-checking AI. Analyze the CLAIM strictly based on the WEB SEARCH EVIDENCE.
@@ -92,7 +90,7 @@ def analyze_with_llm(claim: str, context: str) -> str:
         return "VERDICT: ERROR\nREASON: Could not connect to reasoning engine."
 
 # ==========================================
-# LAYER 3: AI Image Detection (Ultimate Gemini Fix)
+# LAYER 3: Gemini Multi-Modal (AI Detect & OCR)
 # ==========================================
 def detect_ai_image(file_path: str) -> str:
     try:
@@ -100,16 +98,27 @@ def detect_ai_image(file_path: str) -> str:
         prompt = """
         Analyze this image carefully. Is it AI-generated or a real photograph? 
         Look for AI artifacts like distorted hands, unnatural lighting, overly smooth textures, weird background text, or impossible geometry.
-        
         Respond EXACTLY in this format (and nothing else):
         **[🤖 AI GENERATED or 📸 REAL/HUMAN]**
         *Reason:* [One short sentence explaining the visual evidence you found.]
         """
-        response = model.generate_content([prompt, img])
-        return response.text.strip()
+        return model.generate_content([prompt, img]).text.strip()
     except Exception as e:
         logger.error(f"Gemini Vision API Error: {e}")
         return "⚠️ Detection failed. Could not analyze image."
+
+def extract_text_with_gemini(file_path: str) -> str:
+    """Replaces EasyOCR. Uses Gemini to read text from the image with 0 RAM usage."""
+    try:
+        img = Image.open(file_path)
+        prompt = "Extract all readable text from this image. Do not add any commentary. If there is no readable text, reply with exactly the word NONE."
+        response = model.generate_content([prompt, img]).text.strip()
+        if response == "NONE":
+            return ""
+        return response
+    except Exception as e:
+        logger.error(f"Gemini OCR Error: {e}")
+        return ""
 
 # ==========================================
 # TELEGRAM HANDLERS
@@ -154,6 +163,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = "temp_image.jpg"
     await file.download_to_drive(file_path)
 
+    # --- ROUTE 1: AI DETECTION ---
     if user_id in AWAITING_AI_CHECK:
         AWAITING_AI_CHECK.remove(user_id)
         processing_msg = await update.message.reply_text("🤖 Analyzing image details with Gemini Vision...")
@@ -163,17 +173,16 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"Error: {e}")
         finally:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if os.path.exists(file_path): os.remove(file_path)
         return
 
-    processing_msg = await update.message.reply_text("🖼️ Running OCR on image...")
+    # --- ROUTE 2: GEMINI OCR FACT-CHECK ---
+    processing_msg = await update.message.reply_text("🖼️ Extracting text with Gemini Vision...")
     try:
-        results = reader.readtext(file_path, detail=0)
-        claim = " ".join(results)
+        claim = extract_text_with_gemini(file_path)
         
         if not claim.strip():
-            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text="❌ Could not extract any text from the image.")
+            await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text="❌ Could not extract any readable text from the image.")
             return
 
         is_valid, reply_message = sanity_check_passed(claim)
@@ -191,8 +200,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=processing_msg.message_id, text=f"Error: {e}")
     finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if os.path.exists(file_path): os.remove(file_path)
 
 # ==========================================
 # RENDER.COM HEALTH CHECK SERVER
@@ -221,7 +229,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_image))
     
-    logger.info("TruthGuard Bot v7.2 Deployment Ready...")
+    logger.info("TruthGuard Bot v8.0 (Ultra-Light Cloud Edition) is running...")
     app.run_polling()
 
 if __name__ == '__main__':
