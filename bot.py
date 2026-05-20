@@ -51,37 +51,21 @@ def analyze_with_llm(claim: str, context: str) -> str:
     except Exception as e: return f"Reasoning Error: {str(e)}"
 
 def detect_ai_image(file_path: str) -> str:
-
     """Forensic Investigator prompt for historical and visual analysis."""
-
     try:
-
         img = Image.open(file_path)
-
         prompt = """
-
         Analyze this image as an expert forensic investigator:
-
         1. IDENTIFY: Who are the people or what are the objects?
-
         2. HISTORICAL CHECK: Is it historically possible for these people to be together?
-
         3. VISUAL CHECK: Look for AI artifacts like weird hands or physics errors.
-
         
-
         Respond in this format:
-
         VERDICT: [AI GENERATED or REAL/HUMAN]
-
         REASON: [Short explanation of visual and historical evidence.]
-
         """
-
         response = client.models.generate_content(model=MODEL_ID, contents=[img, prompt])
-
         return response.text.strip()
-
     except Exception as e: return f"Detection Error: {str(e)}"
 
 def extract_text(file_path: str) -> str:
