@@ -51,39 +51,38 @@ def analyze_with_llm(claim: str, context: str) -> str:
     except Exception as e: return f"Reasoning Error: {str(e)}"
 
 def detect_ai_image(file_path: str) -> str:
+
+    """Forensic Investigator prompt for historical and visual analysis."""
+
     try:
+
         img = Image.open(file_path)
 
-        # STEP 1: Look at the image and generate a search query
-        query_prompt = "Identify the main people and event in this image. Write a short, 4-6 word search query to verify if this happened (e.g., 'Narendra Modi Giorgia Meloni meeting'). Return ONLY the search query."
-        query_res = client.models.generate_content(model=MODEL_ID, contents=[img, query_prompt])
-        search_query = query_res.text.strip()
+        prompt = """
 
-        # STEP 2: Search the live web using Tavily
-        evidence = search_web_evidence(search_query)
+        Analyze this image as an expert forensic investigator:
 
-        # STEP 3: The Ultimate Master Prompt (Pixels + Reality)
-        prompt = f"""
-        You are an expert forensic investigator. Analyze this image using visual inspection AND the provided live web evidence.
+        1. IDENTIFY: Who are the people or what are the objects?
 
-        LIVE WEB EVIDENCE FOR '{search_query}':
-        {evidence}
+        2. HISTORICAL CHECK: Is it historically possible for these people to be together?
 
-        Perform these checks:
-        1. CONTEXT CHECK: Does the live web evidence confirm this specific event actually happened? (Treat the web evidence as the absolute truth, ignoring your pre-trained memory).
-        2. PIXEL & PHYSICS CHECK: Look strictly for AI artifacts (extra fingers, gibberish text, warped backgrounds, unnatural skin blending).
+        3. VISUAL CHECK: Look for AI artifacts like weird hands or physics errors.
 
-        Format exactly like this:
-        VERDICT: [AI GENERATED, REAL/HUMAN, or FAKE CONTEXT]
-        REASON: [Short, 3-sentence explanation. State if it visually passes the pixel check, AND if the web evidence confirms the event actually occurred.]
-        """
-        response = client.models.generate_content(model=MODEL_ID, contents=[img, prompt])
-        return response.text.strip()
         
-    except Exception as e: 
-        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-            return "⏳ **Speed Limit Hit:** The AI is analyzing too many images at once. Please wait 30 seconds and try again!"
-        return f"Detection Error: {str(e)}"
+
+        Respond in this format:
+
+        VERDICT: [AI GENERATED or REAL/HUMAN]
+
+        REASON: [Short explanation of visual and historical evidence.]
+
+        """
+
+        response = client.models.generate_content(model=MODEL_ID, contents=[img, prompt])
+
+        return response.text.strip()
+
+    except Exception as e: return f"Detection Error: {str(e)}"
 
 def extract_text(file_path: str) -> str:
     try:
