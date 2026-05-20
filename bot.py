@@ -36,7 +36,15 @@ def search_web_evidence(claim: str) -> str:
     except: return "Search failed."
 
 def analyze_with_llm(claim: str, context: str) -> str:
-    prompt = f"Expert Fact-Check: '{claim}' using: {context}. Format: VERDICT: [STATUS] REASON: [WHY]."
+    prompt = (
+        f"You are an objective fact-checker. Fact-check this claim: '{claim}'.\n\n"
+        f"CRITICAL INSTRUCTION: Base your verdict strictly on this live search evidence:\n{context}\n\n"
+        f"If the provided evidence contradicts your pre-trained historical memory (e.g., recent elections or breaking changes in 2026), "
+        f"the live evidence is the ABSOLUTE TRUTH. Trust the search results completely.\n\n"
+        f"Format your response exactly like this:\n"
+        f"VERDICT: [True, False, Misleading, or Unsubstantiated]\n"
+        f"REASON: [Give a short, concise, 2-3 sentence summary of the facts found in the search results.]"
+    )
     try:
         response = client.models.generate_content(model=MODEL_ID, contents=prompt)
         return response.text.strip()
