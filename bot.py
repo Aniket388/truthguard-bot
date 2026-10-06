@@ -20,7 +20,7 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 # ==========================================
 # FINAL OPTIMIZED CONFIGURATION
 # ==========================================
-MODEL_ID = 'gemini-2.5-flash-lite'
+MODEL_ID = "gemini-2.5-flash"
 client = genai.Client(api_key=GEMINI_API_KEY)
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
 AWAITING_AI_CHECK = set()
